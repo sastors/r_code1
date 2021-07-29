@@ -11,7 +11,8 @@ cond <- function(dsin = NULL, cond = 1==1){
   
 }
 
-vars <- function(dsin = NULL, var_row = NULL, var_col = NULL, var_by = NULL, rbind = TRUE, ord = c("a", "-a", "n", "-n")){
+vars <- function(dsin = NULL, var_row = NULL, var_col = NULL, var_by = NULL, rbind = TRUE, 
+                 ord = c("a", "-a", "n", "-n"), total = FALSE){
   
   ord <- match.arg(ord)
   
@@ -104,25 +105,51 @@ vars <- function(dsin = NULL, var_row = NULL, var_col = NULL, var_by = NULL, rbi
           as.formula(paste(paste(unique(c(var_col[[i]], var_by)), collapse = " + "), paste(paste0("reorder(factor(", var_row, "), ", var_rown, ")"), collapse = " + "), sep = " ~ ")), value.var = c("M_COUNT", "N_COUNT")
         )[, LOOP_I := i]
         
+        names_row <- sub("^N_COUNT_", "", names(clinf_tmp3)[grepl("^N_COUNT_", names(clinf_tmp3))])
+        names_row_m <- paste0("M_COUNT_", names_row)
+        names_row_n <- paste0("N_COUNT_", names_row)
+        
+        #add for total
+        if (total == TRUE){
+          names_row_tn <- "TOTAL_N_COUNT"
+          names_row_tm <- "TOTAL_M_COUNT"
+          clinf_tmp3[, (names_row_tn) := as.integer(rowSums(.SD, na.rm=T)), .SDcols = names_row_n]
+          clinf_tmp3[, (names_row_tm) := as.integer(rowSums(.SD, na.rm=T)), .SDcols = names_row_m]
+          clinf_tmp3[is.na(TOTAL_N_COUNT), ("TOTAL_N_COUNT") := 0]
+          clinf_tmp3[is.na(TOTAL_M_COUNT), ("TOTAL_M_COUNT") := 0]
+        }
+        #total ending
+        
+        
         if (rbind == TRUE){
           clinf_tmp2 <- rbind(clinf_tmp2, clinf_tmp3, fill=TRUE)
         }else {
           clinf_tmp2 <- cbind(clinf_tmp2, clinf_tmp3)
         }
         
+        #add for order
         if (!missing(ord)){
-          names_row <- sub("^N_COUNT_", "", names(clinf_tmp3)[grepl("^N_COUNT_", names(clinf_tmp3))])
-          names_row_m <- paste0("M_COUNT_", names_row)
-          names_row_n <- paste0("N_COUNT_", names_row)
-          names_row_n2 <- paste0("ORD_", names_row, "_", i)
-          names_row_keep <- c(var_col[[i]], names_row_n)
+          
+          if (total == FALSE){
+            names_row_n1 <- names_row_n
+            names_row_n2 <- paste0("ORD_", names_row, "_", i)
+            names_row_keep <- c(var_col[[i]], names_row_n)
+
+          }else{
+            names_row_n1 <- c(names_row_n, "TOTAL_N_COUNT")
+            names_row_n2 <- paste0("ORD_", c(names_row, "TOTAL_N_COUNT"), "_", i)
+            names_row_keep <- c(var_col[[i]], names_row_n, "TOTAL_N_COUNT")
+          }
           
           clinf_tmp4 <- clinf_tmp3[, ..names_row_keep]
-          setnames(clinf_tmp4, names_row_n, names_row_n2)
+          setnames(clinf_tmp4, names_row_n1, names_row_n2)
           assign(paste0("clinf_ord", i), clinf_tmp4)
         }
+        #order ending1
  
       }
+      
+      #add for order 
       if (!missing(ord)){
         #left join table
         for (i in 1:length(var_col)){
@@ -136,19 +163,39 @@ vars <- function(dsin = NULL, var_row = NULL, var_col = NULL, var_by = NULL, rbi
             setorderv(clinf_tmp2, c("LOOP_I", unlist(var_col)))
           }
         }else if(grepl("n", ord)){
-          a <- NULL
+
+          if (total == TRUE) {
+            names_len <- length(sub("^ORD_", "", names(clinf_tmp2)[grepl("^ORD_", names(clinf_tmp2))]))/(length(names_row) + 1)
+            names_ord <- paste0("ORD_", rep(c("TOTAL_N_COUNT", names_row), rep(names_len, length(names_row) + 1)), "_", c(1:names_len))
+          }else{
+            names_len <- length(sub("^ORD_", "", names(clinf_tmp2)[grepl("^ORD_", names(clinf_tmp2))]))/length(names_row)
+            names_ord <- paste0("ORD_", rep(names_row, rep(names_len, length(names_row))), "_", c(1:names_len))
+          }
+          clinf_tmp2 <- clinf_tmp2[, TMP_ORD_VAR := fcoalesce(mget(names_ord))]
+          clinf_tmp2[is.na(TMP_ORD_VAR), ("TMP_ORD_VAR") := 0] 
+          for (j in names_ord){
+            clinf_tmp2[is.na(get(j)), (j) := 0] 
+          }
+          if (grepl("-", ord)){
+            if (total == TRUE){
+              setorderv(clinf_tmp2, c("TMP_ORD_VAR", names_ord), c(-1, rep.int(-1, names_len*(length(names_row) + 1))))
+            }else{
+              setorderv(clinf_tmp2, c("TMP_ORD_VAR", names_ord), c(-1, rep.int(-1, names_len*(length(names_row)))))
+            }
+          } else{
+            setorderv(clinf_tmp2, c("TMP_ORD_VAR", names_ord))
+          }
         }
         
       }
+      #order ending2
       
     }
     
-    #fill 0 with na
+    #fill na with 0
     names_row <- sub("^N_COUNT_", "", names(clinf_tmp2)[grepl("^N_COUNT_", names(clinf_tmp2))])
-    names_row_m <- paste0("M_COUNT_", names_row)
-    names_row_n <- paste0("N_COUNT_", names_row)
 
-    for (i in c(names_row_m, names_row_n)){
+    for (i in c(paste0("M_COUNT_", names_row), paste0("N_COUNT_", names_row))){
       clinf_tmp2[is.na(get(i)), (i) := 0] 
     }
 
@@ -205,9 +252,15 @@ pops <- function(dsin = NULL, popds = adsl, cond = NULL, var_row = NULL, var_by 
     }
   } 
   
+  #check if TOTAL_N_COUNT exist
+  if ("TOTAL_N_COUNT" %in% names(clinf_tmp1)) {
+    total = TRUE
+  }else{
+    total = FALSE
+  }
+
   clinf_tmp2[eval(substitute(cond)), ]
   clinf_tmp2[!is.na(get(var_row[1])), ]
-  
   
   if (!is.null(var_by)){
     clinf_tmp3 <- dcast(
@@ -219,6 +272,13 @@ pops <- function(dsin = NULL, popds = adsl, cond = NULL, var_row = NULL, var_by 
     names_row <- names(clinf_tmp3)[paste0("N_COUNT_", names(clinf_tmp3)) %in% names(clinf_tmp1)]
     names_row_pop <- paste0("POP_COUNT_", names_row)
     setnames(clinf_tmp3, names_row, names_row_pop)
+    
+    #add for total
+    if (total == TRUE){
+      clinf_tmp3[, ("POP_COUNT_TOTAL") := as.integer(rowSums(.SD, na.rm=T)), .SDcols = names_row_pop]
+      clinf_tmp3[is.na(POP_COUNT_TOTAL), ("POP_COUNT_TOTAL") := 0]
+    }
+    #total ending
     
     invisible(merge(clinf_tmp1, clinf_tmp3, by = var_by))
     
@@ -235,6 +295,16 @@ pops <- function(dsin = NULL, popds = adsl, cond = NULL, var_row = NULL, var_by 
     names_row_n <- paste0("N_COUNT_", names_row)
     names_row_pop <- paste0("POP_COUNT_", names_row)
     setnames(clinf_tmp3, names_row, names_row_pop)
+    
+    #add for total
+    if (total == TRUE){
+      clinf_tmp3[, ("POP_COUNT_TOTAL") := as.integer(rowSums(.SD, na.rm=T)), .SDcols = names_row_pop]
+      clinf_tmp3[is.na(POP_COUNT_TOTAL), ("POP_COUNT_TOTAL") := 0]
+      names_row_p <- c(names_row_p, "PERCENT_TOTAL")
+      names_row_n <- c(names_row_n, "TOTAL_N_COUNT")
+      names_row_pop <- c(names_row_pop, "POP_COUNT_TOTAL")
+    }
+    #total ending
     
     invisible(cbind(clinf_tmp1, clinf_tmp3)[, (names_row_p) := Map(`/`, mget(names_row_n), mget(names_row_pop))])
     
@@ -254,20 +324,34 @@ form <- function(dsin = NULL, decimal = 1, style = c("N", "M", "N (X)", "N (X%)"
   
   style <- match.arg(style)
   
+  #check if TOTAL_N_COUNT exist
+  if ("TOTAL_N_COUNT" %in% names(clinf_tmp1)) {
+    total = TRUE
+  }else{
+    total = FALSE
+  }
+  
   #set decimal
   names_row <- sub("^N_COUNT_", "", names(clinf_tmp1)[grepl("^N_COUNT_", names(clinf_tmp1))])
+  
+  if (total == TRUE){
+    names_row <- c(names_row, "TOTAL")
+  }
+  
   names_row_p <- paste0("PERCENT_", names_row)
-  names_row_n <- paste0("N_COUNT_", names_row)
-  names_row_pop <- paste0("POP_COUNT_", names_row)
+  
   
   clinf_tmp1[, (names_row_p) := round(.SD, decimal), .SDcols = names_row_p]
   
-  #switch(style, mean = mean(x), median = median(x), trimmed = mean(x, trim = 0.1))
-  
+
   for (t in names_row){
-    clinf_tmp1[, eval(substitute(t)) := gsub("X", mget(paste0("PERCENT_", t)), gsub("M", mget(paste0("M_COUNT_", t)), gsub("N", mget(paste0("N_COUNT_", t)), style))), by = list(row.names(clinf_tmp1))]
+    if (t == "TOTAL"){
+      clinf_tmp1[, eval(substitute(t)) := gsub("X", mget(paste0("PERCENT_", t)), gsub("M", mget(paste0(t, "_M_COUNT")), gsub("N", mget(paste0(t, "_N_COUNT")), style))), by = list(row.names(clinf_tmp1))]
+    }else{
+      clinf_tmp1[, eval(substitute(t)) := gsub("X", mget(paste0("PERCENT_", t)), gsub("M", mget(paste0("M_COUNT_", t)), gsub("N", mget(paste0("N_COUNT_", t)), style))), by = list(row.names(clinf_tmp1))]
+    }
   }
-  
+
   invisible(clinf_tmp1)
 } 
 
